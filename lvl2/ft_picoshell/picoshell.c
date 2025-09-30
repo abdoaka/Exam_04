@@ -1,81 +1,119 @@
-#include <stdlib.h>
 #include <sys/wait.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <sysexits.h>
+#include <string.h>
 
-static void	handle_child_process(char **cmd, int prev_fd, int *pipefd,
-		char **next_cmd)
+
+int picoshell(char **cmds[])
 {
-	if (prev_fd != -1)
-	{
-		if (dup2(prev_fd, STDIN_FILENO) == -1)
-			exit(1);
-		close(prev_fd);
-	}
-	if (next_cmd)
-	{
-		close(pipefd[0]);
-		if (dup2(pipefd[1], STDOUT_FILENO) == -1)
-			exit(1);
-		close(pipefd[1]);
-	}
-	execvp(cmd[0], cmd);
-	exit(1);
+    if(!cmds || !*cmds)
+        return 1;
+    int i = 0;
+    int fd[2];
+    int pid;
+    int tmp = -1;
+    int exitcode = 0;   
+    int st;
+
+    while(cmds[i])
+    {
+        if(cmds[i + 1])
+            pipe(fd);
+        pid = fork();
+        if(pid == -1)
+        {
+            close(fd[0]);
+            close(fd[1]);
+            return 1;
+        }
+        if(pid == 0)
+        {
+            if (i == 0)
+            {
+                // first
+                if(cmds[i + 1])
+                {
+                    dup2(fd[1], 1);
+                    close(fd[1]);
+                    close(fd[0]);
+                }
+                execvp(cmds[i][0], cmds[i]);
+                exit(1);
+            }
+            else if (!cmds[i + 1])
+            {
+                // last
+                dup2(tmp, 0);
+                close(tmp);
+                execvp(cmds[i][0], cmds[i]);
+                exit(1);
+            }
+            else
+            { //meddle
+                dup2(tmp, 0);
+                close(tmp);
+                dup2(fd[1], 1);
+                close(fd[0]);
+                close(fd[1]);
+                execvp(cmds[i][0], cmds[i]);
+                exit(1);
+            }
+        }
+        else
+        {
+            if(cmds[i + 1])
+                close(fd[1]);
+            if(tmp != -1)
+                close(tmp);
+            tmp = fd[0];
+        }
+        i++;
+    }
+    while(wait(&st) > 0)
+    ;
+    return(exitcode);
 }
 
-static void	handle_parent_cleanup(int *prev_fd, int *pipefd, char **next_cmd)
-{
-	if (*prev_fd != -1)
-		close(*prev_fd);
-	if (next_cmd)
-	{
-		close(pipefd[1]);
-		*prev_fd = pipefd[0];
-	}
-}
+// int main(int argc, char **argv)
+// {
+// 	int cmds_size = 1;
+// 	for (int i = 1; i < argc; i++)
+// 	{
+// 		if (!strcmp(argv[i], "|"))
+// 			cmds_size++;
+// 	}
+// 	char ***cmds = calloc(cmds_size + 1, sizeof(char **));
+// 	if (!cmds)
+// 	{
+// 		dprintf(2, "Malloc error: %m\n");
+// 		return 1;
+// 	}
+// 	cmds[0] = argv + 1;
+// 	int cmds_i = 1;
+// 	for (int i = 1; i < argc; i++)
+// 		if (!strcmp(argv[i], "|"))
+// 		{
+// 			cmds[cmds_i] = argv + i + 1;
+// 			argv[i] = NULL;
+// 			cmds_i++;
+// 		}
+// 	int ret = picoshell(cmds);
+// 	if (ret)
+// 		perror("picoshell");
+// 	free(cmds);
+// 	return ret;
+// }
 
-static int	wait_for_all_children(void)
-{
-	int	status;
-	int	exit_code;
-
-	exit_code = 0;
-	while (wait(&status) != -1)
-	{
-		if (WIFEXITED(status) && WEXITSTATUS(status) != 0)
-			exit_code = 1;
-	}
-	return (exit_code);
-}
-
-int	picoshell(char **cmds[])
-{
-	pid_t	pid;
-	int		pipefd[2];
-	int		prev_fd;
-	int		i;
-
-	prev_fd = -1;
-	i = 0;
-	while (cmds[i])
-	{
-		if (cmds[i + 1] && pipe(pipefd))
-			return (1);
-		pid = fork();
-		if (pid == -1)
-		{
-			if (cmds[i + 1])
-			{
-				close(pipefd[0]);
-				close(pipefd[1]);
-			}
-			return (1);
-		}
-		if (pid == 0)
-		{
-			handle_child_process(cmds[i], prev_fd, pipefd, cmds[i + 1]);
-		}
-		handle_parent_cleanup(&prev_fd, pipefd, cmds[i + 1]);
-		i++;
-	}
-	return (wait_for_all_children());
-}
+// int main()
+// {
+//     char *cmd1[] = {"ls", "-l", NULL};
+//     char *cmd2[] = {"wc", "-l", NULL};
+//     char *cmd3[] = {"cat", "-e", NULL};
+//     // char *cmd4[] = {"cat", "-e", NULL};
+//     char **cmd[] = {cmd1, cmd2, cmd3,  NULL};
+//     int code = picoshell(cmd);
+//     printf("exit code %d\n", code );
+//     // pause();
